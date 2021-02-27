@@ -112,6 +112,291 @@ def load_demands (data_dem, customers, i):  # similar to the above function
     data_dem['demands'] = dem
     return data_dem
 
+###FUNCTIONS OF SIMPLE HEURISTIC###
+#Defining the benefits for inbound hybrid
+def load_benefits_start_inbnd(depots,hyb):
+    r=[7 if hyb else 3][0]
+    benefits=[[] for i in range(r)]
+    cur_max = [0 for i in range(r)]
+    cur_max_ind = [-1 for i in range(r)]
+    for i in depots:
+        for k in range(len(customers_ic)): benefits[i].append(0)
+        #inbound
+        for j in customers_ic:
+            k=j.index
+            if k in [3,4,5,6]:
+                benefits[i][k]+= 0.7*1000*int(j.acc_orders[i]) / (data_geb_ic["distance_matrix"][i][k] + .1 ) +50;  ##BENEFIT MANIPULATION FOR FACTORIES SHOULD BE RECONSIDERED
+            else:
+                k=j.index
+                benefits[i][k]+= 0.7*1000*int(j.acc_orders[i]) / (data_geb_ic["distance_matrix"][i][k] + .1 ) 
+            
+            if dist_df_ic.iloc[k]["belongs"] == i:
+                benefits[i][k] *= 2
+            else:
+                benefits[i][k] *=0.5
+        cur_max[i] = np.max(benefits[i])
+        cur_max_ind[i] = int(np.argmax(benefits[i]))
+    chosen_wh_ind = int(np.argmax(cur_max)) #gives the selected warehouse
+    chosen_dest_ind = cur_max_ind[chosen_wh_ind] #gives the selected customer location 
+    return [cur_max[chosen_wh_ind], chosen_wh_ind, chosen_dest_ind]
+
+def load_benefits_start_spot_hyb(depots,hyb):
+    r=[7 if hyb else 3][0]
+    benefits=[[] for i in range(r)]
+    cur_max = [0 for i in range(r)]
+    cur_max_ind = [-1 for i in range(r)]
+    for i in depots:
+        for k in range(len(customers_dis)): benefits[i].append(0)
+        #outbound
+        for locat in customers_dis:
+            k = locat.index
+            if k not in [3,4,5,6]:
+                benefits[i][k] +=  1000 * int(locat.acc_orders[i]) / (data_geb_dis["distance_matrix"][wh_ind_outbnd[i]][k] + 0.1)
+                if dist_df.iloc[k]["belongs"] == i:
+                    benefits[i][k] *= 2 #####################
+                else:
+                    benefits[i][k] *= .5 ####################
+                
+                if locat.tip=='zm': benefits[i][k] *= 1.2 + .5 *locat.days_since_ship
+                else: benefits[i][k] *= 1   + .1 *locat.days_since_ship
+            else:
+                benefits[i][k]+=0
+        if i > 2 : benefits[i] = [2*q for q in benefits[i]]
+        cur_max[i] = np.max(benefits[i])
+        cur_max_ind[i] = int(np.argmax(benefits[i]))
+    #print(cur_max)
+    chosen_wh_ind = int(np.argmax(cur_max))
+    chosen_dest_ind = cur_max_ind[chosen_wh_ind]
+    return [cur_max[chosen_wh_ind], chosen_wh_ind, chosen_dest_ind]
+
+def find_vehicle_inbnd(chosen_wh_ind, chosen_dest_ind, lookForSpot):
+    i = chosen_wh_ind
+    q = customers_ic[chosen_dest_ind].acc_orders[i]
+    vehiclefound=False
+    limitForTruck = [15 if lookForSpot else 8][0]#################
+    if q > limitForTruck or (chosen_dest_ind in [0,1,2,3,4,5,6,7,8,9]): ########################
+        if fleets[i].havetruck:  desired = "T"
+        else: desired = "K"
+    else: desired = "K"
+
+    for v in fleets[i].v:
+        if v.returned and v.tip == desired and not vehiclefound:
+            v.returned = False;
+            fleets[i].v_left(v); fleets[i].avail_check()
+            vehiclefound=True
+            return v
+    if not vehiclefound: return 0
+
+def find_vehicle_outbnd(chosen_wh_ind, chosen_dest_ind, lookForSpot):
+    i = chosen_wh_ind
+    q = customers_dis[chosen_dest_ind].acc_orders[i]
+    vehiclefound=False
+    limitForTruck = [15 if lookForSpot else 8][0]#################
+    if q > limitForTruck: ########################
+        if fleets[i].havetruck:  desired = "T"
+        else: desired = "K"
+    else: desired = "K"
+
+    for v in fleets[i].v:
+        if v.returned and v.tip == desired and not vehiclefound:
+            v.returned = False;
+            fleets[i].v_left(v); fleets[i].avail_check()
+            vehiclefound=True
+            return v
+    if not vehiclefound: return 0
+    
+def load_benefits_route_inbnd(cur_loc, vhc, routeSoFar, is_spot):
+    a=1;
+    wh_i = vhc.base_index
+    benefits=[]    
+    cur_max = []
+    cur_max_ind = []
+    i = vhc.base_index
+    if (cur_loc in [3,4,5,6,7,8,9]) and (is_spot):
+        return "fail"
+    else:
+        for locat in customers_ic:
+            if locat.index not in routeSoFar:
+                benefits.append( 1000 * np.min([int(locat.acc_orders[wh_i]), vhc.rem_cap]) / ((data_geb_ic["distance_matrix"][cur_loc][locat.index]) + 0.01) )
+                if locat.index  in [0,1,2,3,4,5,6] and not is_spot:
+                    if locat.index in [3,4,5,6]:
+                      benefits[locat.index]+=.7*20
+                    else:
+                      j_cus = locat.index
+                      benefits[locat.index] =  1000 * customers_ic[i+7].acc_orders[j_cus] / ((data_geb_ic["distance_matrix"][cur_loc][locat.index])**1.2 + 0.01)
+                      benefits[locat.index] *= (2*vhc.cap - vhc.rem_cap)/vhc.cap
+            else:
+                benefits.append(0)
+        cur_max = (np.max(benefits))
+        cur_max_ind = (int(np.argmax(benefits)))
+        if cur_max > thresholds[wh_i]: ##################
+            return cur_max_ind
+        else: return "fail"
+
+def load_benefits_route_outbnd(cur_loc, vhc, routeSoFar, is_spot):
+    wh_i = vhc.base_index
+    benefits=[]    
+    cur_max = []
+    cur_max_ind = []
+    i = vhc.base_index
+    if cur_loc in [0,1,2]:
+        return "fail"
+    else:
+        for locat in customers_dis:
+            if locat.index not in routeSoFar:
+                benefits.append( 1000 * np.min([int(locat.acc_orders[wh_i]), vhc.rem_cap]) / ((data_geb_dis["distance_matrix"][cur_loc][locat.index]) + 0.01) )
+                if dist_df.iloc[locat.index]["belongs"] == i:
+                    benefits[locat.index] *= 2  ####################
+                else:
+                    benefits[locat.index] *= .5 ####################
+            else:
+                benefits.append(0)
+        cur_max = (np.max(benefits))
+        #print(cur_max)
+        cur_max_ind = (int(np.argmax(benefits)))
+        if cur_max > thresholds[wh_i]: ##################
+            return cur_max_ind
+        else: return "fail"
+
+def find_route_inbnd_ded(strprint, v, current_loc_ind, spot):
+    wh_index = v.base_index
+    routeLimit =[3 if spot else 6][0]
+    routes = []
+    quants = []
+    distances= []
+    totalEmptyDistance = 0
+    routes.append(v.base_index)
+    customers_ic[v.base_index].shipment_received()
+    distance = data_geb_ic["distance_matrix"][v.base_index][current_loc_ind]#going
+    total_distance =  distance
+    distances.append(distance)
+    if current_loc_ind in [0,1,2,3,4,5,6]: totalEmptyDistance += distance
+    routes.append(current_loc_ind)
+    customers_ic[current_loc_ind].shipment_received()
+    next_target = current_loc_ind
+    inbound = False
+    while True: 
+        #inbound
+        if next_target in [0,1,2,3,4,5,6]:
+            j_cus = next_target
+            quant = v.cap
+            quants.append(0)
+            customers_ic[v.base_index+7].acc_orders[j_cus] -= quant
+            strprint += " -> " + customers_ic[next_target].name + "(given:" + "0" + ")"
+
+            if not spot:
+              distance = data_geb_ic["distance_matrix"][next_target][v.base_index]#return
+              total_distance +=  distance
+              distances.append(distance)
+              routes.append(v.base_index)
+              customers_ic[v.base_index].shipment_received()
+              strprint += " -> " + customers_ic[v.base_index].name + "(taken:" + str(v.cap) +")"
+            inbound = True
+            break
+        elif next_target != "fail": 
+            quant = int(np.min([v.rem_cap,   customers_ic[next_target].acc_orders[wh_index]]))
+            quants.append(quant)
+            v.rem_cap -= quant
+            customers_ic[next_target].acc_orders[wh_index] -= quant 
+            strprint += " -> " + customers_ic[next_target].name + "(given:" + str(quant) +")"
+
+        current_loc_ind = next_target
+        if len(routes) >= routeLimit:  ##################### route destination number
+            next_target= "fail"
+        else:
+            next_target = load_benefits_route_inbnd(next_target, v, routes, spot)
+
+        if next_target != "fail":
+            distance = data_geb_ic["distance_matrix"][current_loc_ind][next_target]#return
+            total_distance +=  distance
+            distances.append(distance)
+            routes.append(next_target)
+            customers_ic[next_target].shipment_received()
+            if next_target in [0,1,2, 3, 4, 5, 6]: totalEmptyDistance += distance
+        if next_target == "fail":
+            if not spot: 
+                quants.append(0)
+                strprint += " -> " + customers_ic[v.base_index].name
+                distance = data_geb_ic["distance_matrix"][current_loc_ind][v.base_index]#going
+                total_distance +=  distance
+                distances.append(distance)
+                routes.append(v.base_index)
+                if current_loc_ind not in [0,1,2,3,4,5,6]: totalEmptyDistance += distance
+            break
+    st = output_statistic(quants, v, inbound, distances, totalEmptyDistance, total_distance)
+    return [routes, total_distance, strprint, st]
+
+    
+def find_route_outbnd_spt(strprint, v, current_loc_ind, spot):
+    wh_index = v.base_index
+    routeLimit =3
+    routes = []
+    quants = []
+    distances= []
+    totalEmptyDistance = 0
+    routes.append(v.base_index)
+    customers_dis[v.base_index].shipment_received()
+    distance = data_geb_dis["distance_matrix"][v.base_index][current_loc_ind]#going
+    total_distance =  distance
+    distances.append(distance)
+    if current_loc_ind in [0,1,2]: totalEmptyDistance += distance
+    routes.append(current_loc_ind)
+    customers[current_loc_ind].shipment_received()
+    next_target = current_loc_ind
+    inbound = False
+    while True:
+        if next_target != "fail": 
+            quant = int(np.min([v.rem_cap,   customers_dis[next_target].acc_orders[wh_index]]))
+            quants.append(quant)
+            v.rem_cap -= quant
+            customers_dis[next_target].acc_orders[wh_index] -= quant 
+            strprint += " -> " + customers_dis[next_target].name + "(given:" + str(quant) +")"
+
+        current_loc_ind = next_target
+        if len(routes) >= routeLimit:  ##################### route destination number
+            next_target= "fail"
+        else:
+            next_target = load_benefits_route_outbnd(next_target, v, routes, spot)
+
+        if next_target != "fail":
+            distance = data_geb_dis["distance_matrix"][current_loc_ind][next_target]#return
+            total_distance +=  distance
+            distances.append(distance)
+            routes.append(next_target)
+            customers_dis[next_target].shipment_received()
+            if next_target in [0,1,2]: totalEmptyDistance += distance
+        if next_target == "fail":
+            break
+    st = output_statistic(quants, v, inbound, distances, totalEmptyDistance, total_distance)
+    return [routes, total_distance, strprint, st]
+
+def prepare_fleet_inbnd(trucks, lorries):
+    for i in range(7):
+        trucknumber=1;   lorrynumber=1;   fleetAtHand=[];   baseind = i
+        while trucks[i] + lorries[i] > 0:
+            if trucks[i] >0:
+                name = "34 T 0" + str(trucknumber)
+                fleetAtHand.append(vehicle("T", name, spot=False, base=customers_ic[i]))
+                trucknumber +=1
+                trucks[i] -=1
+            if lorries[i] >0:
+                name = "34 K 0" + str(lorrynumber)
+                fleetAtHand.append(vehicle("K", name, spot=False, base=customers_ic[i]))
+                lorrynumber+=1
+                lorries[i] -=1
+        if i ==0: fleet_geb = make_fleet(fleetAtHand)
+        if i ==1: fleet_nev = make_fleet(fleetAtHand)
+        if i ==2: fleet_ala = make_fleet(fleetAtHand)
+        if i ==3: fleet_bil = make_fleet(fleetAtHand)
+        if i ==4: fleet_sar = make_fleet(fleetAtHand)
+        if i ==5: fleet_ela = make_fleet(fleetAtHand)
+        if i ==6: fleet_mer = make_fleet(fleetAtHand)
+    fleets = [fleet_geb, fleet_nev, fleet_ala,fleet_bil,fleet_sar,fleet_ela,fleet_mer]
+    return fleets
+
+###FUNCTIONS OF SIMPLE HEURISTIC###
+
+
 def load_benefits_start(depots, plan):                      # inputs are the possible exit points and the vehicle allocation plan
     supply_point_number = 3 if plan == "ded_only" else 7    # dedicated only scenario does not consider factories as possible exit points (see TBD 9)
     benefits=[[] for i in range(supply_point_number)]       # benefit array starts empty for each exit point
@@ -417,6 +702,35 @@ INITIALIZATIONS
 ******
 """
 
+##INITIALIZATIONS FOR SIMPLE HEURISTIC###
+data_geb_ic={}; data_geb_dis={}
+loc_type_df_dis=pd.read_excel(r"/content/drive/MyDrive/MEYYO/musteri_tip_dis.xlsx")
+dist_df_dis=pd.read_excel(r"/content/drive/MyDrive/MEYYO/distances_dis.xlsx")
+data_geb_ic=load_distances(data_geb_ic,dist_df_ic)
+data_geb_dis=load_distances(data_geb_dis,dist_df_dis)
+
+customers_ic=[]
+for i in range(dist_df_ic.shape[0]):
+  name = str(dist_df_ic.iloc[i]["FROM/TO"]) #inbound names are taken from distances excel
+  if i in [7,8,9]:
+    t="wh"
+  else:
+    t="factory" 
+  customers_ic.append(location(str(dist_df_ic.iloc[i]["FROM/TO"]), t, i)) #assigns name,type,index to each point
+
+
+customers_dis=[]
+for i in range(dist_df_dis.shape[0]):
+  name=str(dist_df_dis.iloc[i]["FROM/TO"])
+  if loc_type_df_dis.loc[loc_type_df.place == name].empty:
+    t="na"
+  else:
+    t=loc_type_df_dis.loc[loc_type_df_dis.place == name].iloc[0].tip
+  customers_dis.append(location(str(dist_df_dis.iloc[i]["FROM/TO"]), t, i))
+
+##INITIALIZATIONS FOR SIMPLE HEURISTIC###
+
+
 dist_df = pd.read_excel(r"/content/drive/MyDrive/data/MEY | SIM | LP/distances.xlsx")
 loc_type_df = pd.read_excel(r"/content/drive/MyDrive/data/MEY | SIM | LP/musteri_tip.xlsx")
 data = {}
@@ -540,6 +854,180 @@ demands_oct["norm_periodic"] = demands_oct.norm_demand / demands_oct.norm_count
 SIMULATION
 *****
 """
+###CHANGES ON THE MAIN FUNCTION FOR SIMPLE HEURISTIC###
+plan_for = "hybrd_spot_simple_heur" 
+demand_plan = "frequency_outbnd"
+hyb_inb=True;
+exit_points = [7 if hyb_inb else 3][0]
+wh_ind_outbnd=[0,1,2,3,4,5,6]
+contracted_routes = [[2,7], [1,7],[6,8], [1,9]]  ###deal_rts'dekiler de eklenecek
+contracted_costs = [2734, 3092, 2925, 3786]
+wh_ind_outbnd=[0,1,2,3,4,5,6]
+o=0;
+
+
+for time in np.linspace(time_increment,maxdays,int(maxdays / time_increment)): #iterates through time points according to parameters above
+    print("\n### DAY ", int(time),"dedike",o, " ###")
+    for cust in customers:
+        if sum(cust.acc_orders) > 2:
+            cust.dayPassed()
+
+    for i in range(exit_points):
+        #Returning the vehicles
+        for v in fleets[i].v: #for every vehicle in the fleet of each exit location...
+            if not v.returned and (v.return_time < time or plan_for =="spot_only"):#if its returned status is false and return time has already come ...
+                v.stat = "wh"; v.returned = True; fleets[i].v_return(v); v.rem_cap = v.cap #update it as "wh" (in the warehouse) and update fleet with the vehicle (see v_return func. above)
+                if plan_for != "spot_only":
+                    print("#RETURN: ",v.plate, " returned to ", v.base.name) 
+        #Getting the daily demands
+        if demand_plan == "frequency_inbnd" :
+            for locat in customers_ic:
+                if not locat.index in [7,8,9]:
+                    sub_dem = demands_oct.loc[(demands_oct.from_place == customers_ic[wh_ind[i]].name)  &  (demands_oct.to_place == locat.name)]
+                    if not sub_dem.empty:
+                        if (time-1) % int(30/sub_dem["norm_count"]) == 0 and time != maxdays:
+                            if not locat.index in [0,1,2]:
+                                locat.acc_orders[i] += int(sub_dem["norm_periodic"].iloc[0])+1 
+                                locat.passive = False   
+                            else: 
+                                customers_ic[locat.index + 7].acc_orders[i] += int(sub_dem["norm_periodic"].iloc[0])+1
+                                customers_ic[locat.index + 7].passive = False
+        
+        if demand_plan == "frequency_outbnd" :
+            for locat in customers_dis:
+                  sub_dem = demands_oct.loc[(demands_oct.from_place == customers_dis[wh_ind_outbnd[i]].name)  &  (demands_oct.to_place == locat.name)]
+                  if not sub_dem.empty:
+                      if (time-1) % int(30/sub_dem["norm_count"]) == 0 and time != maxdays:
+                          if not locat.index in [0,1,2]:
+                              locat.acc_orders[i] += int(sub_dem["norm_periodic"].iloc[0])+1 
+                              locat.passive = False   
+                              
+        
+        fleets[i].avail_check()
+        
+    if (time+1)%7 != 0 and time%7 !=0 :
+        if plan_for == "hybrd_ded_simple_heur":
+            possible_depots =[d for d in range(exit_points)]; thresholds = [[105,60,60] if not hyb_inb else [80,45,50, 50,50,50,50]][0]; t=[]
+            while len(possible_depots) > 0:
+                [cur_max, chosen_wh_ind, chosen_dest_ind] = load_benefits_start_inbnd(possible_depots,hyb_inb)
+                if cur_max > thresholds[chosen_wh_ind]:###########
+                    deal_rts=[[2,7],[0,8],[1,7],[6,8],[8,6],[1,9],[2,8],[0,9]]
+                    p=1; o=0;
+                    while p:                          #For deal routes
+                        for i in deal_rts:
+                            if ([chosen_wh_ind,chosen_dest_ind]==i): #or (chosen_wh_ind in [3,4,5,6]):
+                                chosen_vehicle = find_vehicle_inbnd(chosen_wh_ind, chosen_dest_ind, lookForSpot=True)
+                                p=0;
+                                break
+                        break                         
+                    if p:
+                        o+=1; ##dummy variable for checking
+                        chosen_vehicle = find_vehicle_inbnd(chosen_wh_ind, chosen_dest_ind, lookForSpot=False)
+                    ##FIND ROUTE SPOT(1) --done 
+                    #Anlasmalılar:Alaşehir-Gebze,Nevşehir-Gebze,Elazığ-Nevşehir,Nevşehir-Alaşehir--done
+                    ##SPOT COST CALCULATOR CHANGE(2)--done
+                    #Depo_dem vs depo_normal farkı(3)--I guess it is not required!
+                    #SPOT Outbound!!(4) -- kısmen done RETURN PROBLEMI --I guess it is not a problem!
+                    #Prepare fleet hatası(5) --done 
+                    #Exit point manipulation --done
+                    if (p) and (chosen_vehicle != 0): #routes with dedicated trucks
+                        strprint = chosen_vehicle.plate +" "+ customers_ic[chosen_wh_ind].name
+                        [newroute, distanceOfRoute, strprint, stats] = find_route_inbnd_ded(strprint, chosen_vehicle, chosen_dest_ind, spot=False)
+                        all_empty_distances[chosen_wh_ind].append(stats.emptyDistRate)
+                        totalReturnCost[chosen_wh_ind] += stats.emptyDistRate*distanceOfRoute*chosen_vehicle.cost
+                        all_distances[chosen_wh_ind].append(distanceOfRoute)
+                        all_mean_fill[chosen_wh_ind].append(stats.mean_fill)
+                        all_mean_fill_bin[chosen_wh_ind].append(stats.mean_fill_bin)
+                        cost = distanceOfRoute * chosen_vehicle.cost
+                        total_cost[chosen_wh_ind] += cost
+                        strprint += " -- " + str(distanceOfRoute) + "km" + "(₺" + str(int(cost)) + ")"
+                        duration = distanceOfRoute/(chosen_vehicle.speed) + (len(newroute)-2)*1 #LOAD UNLOAD DURATION
+                        if duration > 9: duration = 24*int(duration/9) + duration
+                        chosen_vehicle.return_time = time + duration/24
+                        print(strprint)
+                        fleets[chosen_wh_ind].avail_check()
+                    elif (1-p) and (chosen_vehicle != 0):  #spot routes with deals
+                        strprint = chosen_vehicle.plate +" "+ customers_ic[chosen_wh_ind].name
+                        [newroute, distanceOfRoute, strprint, stats] = find_route_inbnd_ded(strprint, chosen_vehicle, chosen_dest_ind, spot=True)
+                        all_empty_distances[chosen_wh_ind].append(stats.emptyDistRate)
+                        totalReturnCost[chosen_wh_ind] += stats.emptyDistRate*distanceOfRoute*chosen_vehicle.cost
+                        all_distances[chosen_wh_ind].append(distanceOfRoute)
+                        all_mean_fill[chosen_wh_ind].append(stats.mean_fill)
+                        all_mean_fill_bin[chosen_wh_ind].append(stats.mean_fill_bin)
+                        [cost,extraReturnCost] = spot_cost_calculator(newroute, distanceOfRoute, chosen_vehicle, contracted_routes, contracted_costs)
+                        
+                        cost = distanceOfRoute * chosen_vehicle.cost
+                        total_cost[chosen_wh_ind] += cost
+                        totalReturnCost[chosen_wh_ind] += extraReturnCost
+                       
+                        ########
+                        total_cost[chosen_wh_ind] += cost
+                        strprint += " -- " + str(distanceOfRoute) + "km" + "(₺" + str(int(cost)) + ")"
+                        duration = distanceOfRoute/(chosen_vehicle.speed) + (len(newroute)-2)*1 #LOAD UNLOAD DURATION
+                        if duration > 9: duration = 24*int(duration/9) + duration
+                        chosen_vehicle.return_time = time + duration/24
+                        print(strprint)
+                        fleets[chosen_wh_ind].avail_check()
+                    else: 
+                        if chosen_dest_ind>0:
+                          possible_depots.remove(chosen_wh_ind)
+                          print("No vehicle found in ", customers_ic[chosen_wh_ind].name)
+                          vehicle_avail[chosen_wh_ind].append(fleets[chosen_wh_ind].available_lorry + fleets[chosen_wh_ind].available_truck)
+                else:
+                    if chosen_dest_ind>0:
+                      possible_depots.remove(chosen_wh_ind)
+                      print("Shipments from ", customers_ic[chosen_wh_ind].name, " no longer desirable today.")
+                      vehicle_avail[chosen_wh_ind].append(fleets[chosen_wh_ind].available_lorry + fleets[chosen_wh_ind].available_truck)
+                    else:
+                      break
+
+        elif plan_for == "hybrd_spot_simple_heur":
+            possible_depots =[d for d in range(exit_points)]; thresholds = [[105,60,60] if not hyb_inb else [80,45,50, 50,50,50,50]][0];
+            while len(possible_depots) > 0:
+                [cur_max, chosen_wh_ind, chosen_dest_ind] = load_benefits_start_spot_hyb(possible_depots,hyb_inb)
+                if cur_max > thresholds[chosen_wh_ind]:###########
+                    chosen_vehicle = find_vehicle_outbnd(chosen_wh_ind, chosen_dest_ind, lookForSpot=True)
+                    if chosen_vehicle != 0:
+                        strprint = chosen_vehicle.plate +" "+ customers_dis[wh_ind_outbnd[chosen_wh_ind]].name
+                        [newroute, distanceOfRoute, strprint, stats] = find_route_outbnd_spt(strprint, chosen_vehicle, chosen_dest_ind, spot=True)
+                        #CONVERT TO SPOT?? CONTINUE WITH ADJUSTED SPOT ROUTE
+                        all_empty_distances[chosen_wh_ind].append(stats.emptyDistRate)
+                        all_distances[chosen_wh_ind].append(distanceOfRoute)
+                        all_mean_fill[chosen_wh_ind].append(stats.mean_fill)
+                        all_mean_fill_bin[chosen_wh_ind].append(stats.mean_fill_bin)
+                        #distanceOfRoute += data_geb["distance_matrix"][finalpoint][chosen_wh_ind]
+                        [cost,extraReturnCost] = spot_cost_calculator(newroute, distanceOfRoute, chosen_vehicle, contracted_routes, contracted_costs)
+
+                        cost = distanceOfRoute * chosen_vehicle.cost
+                        total_cost[chosen_wh_ind] += cost
+                        totalReturnCost[chosen_wh_ind] += extraReturnCost
+
+                        total_cost[chosen_wh_ind] += cost
+                        strprint += " -- " + str(distanceOfRoute) + "km" + "(₺" + str(int(cost)) + ")"
+                        duration = distanceOfRoute/(chosen_vehicle.speed) + (len(newroute)-2)*1 #LOAD UNLOAD DURATION
+                        if duration > 9: duration = 24*int(duration/9) + duration%9
+                        chosen_vehicle.return_time = time + duration/24
+                        print(strprint)
+                        fleets[chosen_wh_ind].avail_check()
+                    else: 
+                        possible_depots.remove(chosen_wh_ind)
+                        print("No vehicle found in ", customers_dis[wh_ind_outbnd[chosen_wh_ind]].name)
+                        vehicle_avail[chosen_wh_ind].append(fleets[chosen_wh_ind].available_lorry + fleets[chosen_wh_ind].available_truck)
+                else:
+                    if chosen_dest_ind>0:
+                        possible_depots.remove(chosen_wh_ind)
+                        print("Shipments from ", customers_dis[wh_ind[chosen_wh_ind]].name, " no longer desirable today.")
+                        vehicle_avail[chosen_wh_ind].append(fleets[chosen_wh_ind].available_lorry + fleets[chosen_wh_ind].available_truck)
+                    else: break
+
+    
+    else: #weekends
+        print("WEEKEND")
+
+    for cust in customers:
+        cust.serviceLevel.append(cust.days_since_ship)
+        
+###CHANGES ON THE MAIN FUNCTION FOR SIMPLE HEURISTIC###        
 
 plan_for = current_plan     # plan is initalized in the previous cell due to fleet generation differences between scenarios
 demand_plan = "frequency"   # selected demand renewal type
@@ -752,6 +1240,7 @@ leftOver=0
 for c in customers:                 #print total remaining demand not satisfied
     leftOver+= sum(c.acc_orders)
 print("leftover", leftOver)
+
 
 """*******
 STATISTICS
