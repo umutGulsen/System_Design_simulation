@@ -34,7 +34,8 @@ Original file is located at
 """
 
 # Commented out IPython magic to ensure Python compatibility.
-# %reset -f #This deletes all the variables
+# %reset -f 
+#This deletes all the variables
 #Libraries used
 import numpy as np
 import pandas as pd
@@ -384,6 +385,8 @@ def spot_cost_calculator(route, dist, vv, c_routes, c_costs):
     return [theCost, data["distance_matrix"][route[-1]][vv.base_index]*vv.cost ]
 
 def spot_converter(routeToCheck, c_routes, prev_vehicle):   # makes a delivery spot if desired
+    if prev_vehicle.spot:              #skip this function if the vehicle is already spot                     
+        return [prev_vehicle, True]
     routeToCheck = routeToCheck[0:-1]                       # excludes the return trip for a possible spot route
     base_ind=prev_vehicle.base_index                        # the base will not change 
     if prev_vehicle.base_index == 164: base_ind = 3
@@ -519,7 +522,7 @@ vehicles_ala = [   # SET UP VEHICLES (tip, plaka, spot mu?, base)
             ]
 fleet_ala = make_fleet(vehicles_ala)
 
-current_plan = "spot_only"          # declare the policy for vehicles
+current_plan = "hybrid"          # declare the policy for vehicles
 
 if current_plan == "hybrid":        # hybrid scenario takes real dedicated numbers and enough spot vehicles to never run out of vehicles
     fleets      = [fleet_geb, fleet_nev, fleet_ala, fleet_bil, fleet_sar, fleet_ela, fleet_mer]
@@ -752,6 +755,8 @@ leftOver=0
 for c in customers:                 #print total remaining demand not satisfied
     leftOver+= sum(c.acc_orders)
 print("leftover", leftOver)
+
+v.plate
 
 """*******
 STATISTICS
