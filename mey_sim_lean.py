@@ -415,6 +415,33 @@ def spot_converter(routeToCheck, c_routes, prev_vehicle):   # makes a delivery s
         converted=False
         return [prev_vehicle, converted]
 
+def route_appender(lst,route):
+    lst.append(route)
+    return lst
+
+def route_counter(lst,custs):
+  elements=[]; cntr=[];
+  for i in lst:
+    a=""
+    for j in range(len(i)):
+      if not j==(len(i)-1):
+        a+=str(custs[i[j]].name) + "-" 
+      else:
+        a+=str(custs[i[j]].name)
+    elements.append(a)
+  num_rt=[]; nam_rt=[];
+  for i in range(len(elements)):
+    b=""
+    p=elements.count(elements[i])
+    b+=str(elements[i])+ " " +"->" +"count:"+str(p)
+    cntr.append(b); nam_rt.append(elements[i]); num_rt.append(p)
+  return cntr,nam_rt,num_rt
+
+def counter_to_dataFrame(path,name,num):
+    d={"rota":name,"sayı":num}
+    df=pd.DataFrame(d)
+    return df
+    
 """********
 INITIALIZATIONS
 ******
@@ -562,6 +589,7 @@ vehicle_avail = [[] for q in range(exit_points)]
 contracted_routes = [[2,0+168], [1,0+168],[166,1+168], [1,2+168]]   # list of contracted routes - for delivery back to warehouses their receiver clones are used ( i+168 takes i to its clone)
 contracted_costs = [2734, 3092, 2925, 3786]                         # costs for contracted routes - has to be in the same order as the routes above
 wh_ind = [0,1,2, 164, 163, 166, 165]                                # conversion for indices - see TBD 10
+tot_route=[];
 for time in np.linspace(0,maxdays,int(1 + maxdays / time_increment)):     # iterates through time points according to parameters above
     if time%1 ==0:                  # start of the day is morning
         print("\n### DAY ", int(time+1), " MORNING ###")
@@ -661,6 +689,7 @@ for time in np.linspace(0,maxdays,int(1 + maxdays / time_increment)):     # iter
                             platenumber = chosen_vehicle.plate  # this is kept seperately since reassignment is a possibility
                             strprint = " " + customers[wh_ind[chosen_wh_ind]].name
                             [newroute, distanceOfRoute, strprint, stats] = find_route(strprint, chosen_vehicle, chosen_dest_ind, spot=chosen_vehicle.spot)# find the finalized route
+                            route_appender(tot_route,newroute)
                             [new_vehicle,spot_converted] = spot_converter(newroute, contracted_routes, chosen_vehicle)  # possible conversion to a contracted spot delivery
                             if spot_converted: platenumber = new_vehicle.plate              # update the plate number if there is reassignment
                             all_empty_distances[chosen_wh_ind].append(stats.emptyDistRate)  # statistics gathering
@@ -758,6 +787,9 @@ print("leftover", leftOver)
 
 v.plate
 
+defcount,rot_names,rot_counts=route_counter(tot_route,customers)
+counter_to_dataFrame(pat,rot_names,rot_counts)
+
 """*******
 STATISTICS
 **********
@@ -785,6 +817,7 @@ for i in range(exit_points):
         plt.legend(["Geb", "Nev", "Ala","Bil", "Sar", "Ela", "Mer"] , loc='upper right')
 plt.show
 
+
 """****
 GARBAGE BELOW
 *****
@@ -810,4 +843,5 @@ for time in np.linspace(0,maxdays,int(1 + maxdays / time_increment)):
     if time%1 < .5:
         if (int(time)+1)%7 != 0 and int(time)%7 !=0:
             print(time)
+
 
